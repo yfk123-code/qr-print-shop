@@ -1,55 +1,136 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
+import QRCode from 'qrcode'
 
 export default function CustomerPrint() {
   const [owner, setOwner] = useState(null)
-  const [file, setFile] = useState(null)
-  const [settings, setSettings] = useState({ copies:1, color_mode:'bw', paper_size:'A4', sides:'single' })
-  const [pageCount, setPageCount] = useState(1)
+  const [files, setFiles] = useState([]) // [{file, name, size, pageCount, pageRange}]
+  const [settings, setSettings] = useState({ copies: 1, color_mode: 'bw', paper_size: 'A4', sides: 'single' })
   const [paymentMethod, setPaymentMethod] = useState('cash')
   const [uploading, setUploading] = useState(false)
   const [success, setSuccess] = useState(null)
   const [step, setStep] = useState(1)
+  const [qrDataUrl, setQrDataUrl] = useState(null)
+  const [paidConfirmed, setPaidConfirmed] = useState(false)
 
   useEffect(() => {
-    supabase.from('owner').select('*').limit(1).single().then(({data}) => setOwner(data))
+    supabase.from('owner').select('*').limit(1).single().then(({ data }) => setOwner(data))
   }, [])
 
-  const handleFile = (e) => {
-    const f = e.target.files[0]
-    if (!f) return
-    if (f.size > 25*1024*1024) { alert('File 25MB se badi hai!'); return }
-    setFile(f)
-    setPageCount(f.type === 'application/pdf' ? Math.max(1, Math.ceil(f.size/80000)) : 1)
-    setStep(2)
+  const handleFiles = (e) => {
+    const selected = Array.from(e.target.files || [])
+    if (!selected.length) return
+
+    const newFiles = []
+    for (const f of selected) {
+      if (f.size > 25 * 1024 * 1024) {
+        alert(`${f.name} 25MB se badi hai, isko skip kiya!`)
+        continue
+      }
+      newFiles.push({
+        file: f,
+        name: f.name,
+        size: f.size,
+        pageCount: f.type === 'application/pdf' ? Math.max(1, Math.ceil(f.size / 80000)) : 1,
+        pageRange: ''
+      })
+    }
+    setFiles(prev => [...prev, ...newFiles])
+    if (newFiles.length) setStep(2)
+    e.target.value = null
   }
 
-  const pricePerPage = settings.color_mode === 'color' ? (owner?.color_price||5) : (owner?.bw_price||2)
-  const totalAmount = pageCount * settings.copies * pricePerPage
-  const upiUrl = 'upi://pay?pa=' + (owner?.upi_id||'') + '&pn=' + encodeURIComponent(owner?.shop_name||'Print') + '&am=' + totalAmount + '&cu=INR&tn=Print-Order'
+  const removeFile = (idx) => {
+    setFiles(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  const updateFileField = (idx, field, value) => {
+    setFiles(prev => prev.map((f, i) => i === idx ? { ...f, [field]: value } : f))
+  }
+
+  const pricePerPage = settings.color_mode === 'color' ? (owner?.color_price || 5) : (owner?.bw_price || 2)
+  const totalPages = files.reduce((sum, f) => sum + (f.pageCount || 0), 0) * settings.copies
+  const totalAmount = totalPages * pricePerPage
+
+  const upiUrl = owner?.upi_id
+    ? 'upi://pay?pa=' + owner.upi_id + '&pn=' + encodeURIComponent(owner?.shop_name || 'Print') + '&am=' + totalAmount + '&cu=INR&tn=Print-Order'
+    : null
+
+  useEffect(() => {
+    if (paymentMethod === 'online' && upiUrl && totalAmount > 0) {
+      QRCode.toDataURL(upiUrl, { width: 220, margin: 1 })
+        .then(setQrDataUrl)
+        .catch(() => setQrDataUrl(null))
+    } else {
+      setQrDataUrl(null)
+    }
+  }, [paymentMethod, upiUrl, totalAmount])
 
   const handleSubmit = async () => {
-    if (!file) return alert('Pehle file upload karo!')
+    if (!files.length) return alert('Pehle file upload karo!')
+    if (totalAmount <= 0) return alert('Amount calculate nahi ho paya, page count check karo!')
+    if (paymentMethod === 'online' && !owner?.upi_id) {
+      return alert('Shop ne abhi UPI ID set nahi ki hai. Cash payment select karo.')
+    }
+    if (paymentMethod === 'online' && !paidConfirmed) {
+      return alert('Pehle payment karo, phir "Maine Payment Kar Diya" checkbox tick karo.')
+    }
+
     setUploading(true)
-    const fileName = Date.now() + '_' + file.name.replace(/[^a-zA-Z0-9.]/g, '_')
-    const { error: ue } = await supabase.storage.from('prints').upload(fileName, file)
-    if (ue) { alert('Upload Error!'); setUploading(false); return }
-    const { data: { publicUrl } } = supabase.storage.from('prints').getPublicUrl(fileName)
-    const { data: last } = await supabase.from('orders').select('token_number').order('created_at',{ascending:false}).limit(1).single()
-    const token = (last?.token_number || 0) + 1
-    const { error: oe } = await supabase.from('orders').insert([{
-      token_number: token, file_url: publicUrl, file_name: file.name,
-      file_size: (file.size/1024).toFixed(1)+'KB', pages: pageCount,
-      copies: settings.copies, color_mode: settings.color_mode,
-      paper_size: settings.paper_size, sides: settings.sides,
-      total_pages: pageCount * settings.copies, amount: totalAmount,
-      payment_method: paymentMethod,
-      payment_status: paymentMethod === 'online' ? 'paid' : 'pending',
-      order_status: 'pending'
-    }])
-    if (oe) { alert('Order Error!') } else { setSuccess({ token, amount: totalAmount, method: paymentMethod }) }
+    try {
+      const { data: last } = await supabase
+        .from('orders')
+        .select('token_number')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single()
+      const token = (last?.token_number || 0) + 1
+
+      const rows = []
+      for (const f of files) {
+        const fileName = Date.now() + '_' + f.name.replace(/[^a-zA-Z0-9.]/g, '_')
+        const { error: ue } = await supabase.storage.from('prints').upload(fileName, f.file)
+        if (ue) throw new Error('Upload failed: ' + f.name)
+
+        const { data: { publicUrl } } = supabase.storage.from('prints').getPublicUrl(fileName)
+
+        rows.push({
+          token_number: token,
+          file_url: publicUrl,
+          file_name: f.name,
+          file_size: (f.size / 1024).toFixed(1) + 'KB',
+          pages: f.pageCount,
+          page_range: f.pageRange || '',
+          copies: settings.copies,
+          color_mode: settings.color_mode,
+          paper_size: settings.paper_size,
+          sides: settings.sides,
+          total_pages: f.pageCount * settings.copies,
+          amount: f.pageCount * settings.copies * pricePerPage,
+          payment_method: paymentMethod,
+          payment_status: paymentMethod === 'online' ? 'pending_verification' : 'pending',
+          order_status: 'pending'
+        })
+      }
+
+      const { error: oe } = await supabase.from('orders').insert(rows)
+      if (oe) throw new Error('Order create failed!')
+
+      setSuccess({ token, amount: totalAmount, method: paymentMethod, count: files.length })
+    } catch (e) {
+      alert(e.message || 'Kuch error aa gaya!')
+    }
     setUploading(false)
+  }
+
+  const resetAll = () => {
+    setSuccess(null)
+    setFiles([])
+    setStep(1)
+    setPaidConfirmed(false)
+    setSettings({ copies: 1, color_mode: 'bw', paper_size: 'A4', sides: 'single' })
+    setPaymentMethod('cash')
   }
 
   if (!owner) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh',background:'linear-gradient(180deg,#667EEA,#764BA2)',color:'white',fontSize:'20px'}}>⏳ Loading...</div>
@@ -57,7 +138,7 @@ export default function CustomerPrint() {
   return (
     <div className="customer-page">
       {success && (
-        <div className="success-overlay" onClick={()=>{setSuccess(null);setFile(null);setStep(1);setSettings({copies:1,color_mode:'bw',paper_size:'A4',sides:'single'})}}>
+        <div className="success-overlay" onClick={resetAll}>
           <div className="success-modal" onClick={e=>e.stopPropagation()}>
             <div style={{fontSize:'80px'}}>✅</div>
             <h2 style={{margin:'15px 0 5px'}}>Order Submitted!</h2>
@@ -65,11 +146,11 @@ export default function CustomerPrint() {
               <div style={{fontSize:'14px',opacity:0.8}}>Your Token</div>
               <div style={{fontSize:'48px',fontWeight:'900'}}>#{success.token}</div>
             </div>
-            <p style={{fontSize:'18px',fontWeight:'700'}}>₹{success.amount}</p>
+            <p style={{fontSize:'18px',fontWeight:'700'}}>₹{success.amount} ({success.count} file{success.count>1?'s':''})</p>
             <p style={{color:'var(--gray)',marginBottom:'15px'}}>
-              {success.method==='cash' ? '💵 Counter pe cash do aur print lo!' : '💳 Payment done! Print ho raha hai!'}
+              {success.method==='cash' ? '💵 Counter pe cash do aur print lo!' : '📱 Payment verify hone ke baad print hoga!'}
             </p>
-            <button className="btn btn-primary btn-full" onClick={()=>{setSuccess(null);setFile(null);setStep(1);setSettings({copies:1,color_mode:'bw',paper_size:'A4',sides:'single'})}}>🆕 New Order</button>
+            <button className="btn btn-primary btn-full" onClick={resetAll}>🆕 New Order</button>
           </div>
         </div>
       )}
@@ -85,27 +166,38 @@ export default function CustomerPrint() {
         </div>
 
         <div className="customer-card">
-          <h3>📄 Step 1: Upload Document</h3>
-          <label className={'upload-zone ' + (file?'has-file':'')}>
-            {file ? (
-              <div>
-                <div style={{fontSize:'50px'}}>✅</div>
-                <p style={{fontWeight:'700',marginTop:'10px'}}>{file.name}</p>
-                <p style={{color:'var(--gray)',fontSize:'14px'}}>{(file.size/1024/1024).toFixed(2)} MB | ~{pageCount} pg</p>
-              </div>
-            ) : (
-              <div>
-                <div className="upload-icon">📁</div>
-                <p style={{fontWeight:'700'}}>Tap to Upload</p>
-                <p style={{color:'var(--gray)',fontSize:'13px'}}>PDF, JPG, PNG, DOCX | Max 25MB</p>
-              </div>
-            )}
-            <input type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" onChange={handleFile} style={{display:'none'}} />
+          <h3>📄 Step 1: Upload Documents (Multiple Allowed)</h3>
+          <label className={'upload-zone ' + (files.length?'has-file':'')}>
+            <div>
+              <div className="upload-icon">📁</div>
+              <p style={{fontWeight:'700'}}>Tap to Upload (Multiple Files)</p>
+              <p style={{color:'var(--gray)',fontSize:'13px'}}>PDF, JPG, PNG, DOCX | Max 25MB per file</p>
+            </div>
+            <input type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" multiple onChange={handleFiles} style={{display:'none'}} />
           </label>
-          {file && <div className="input-group" style={{marginTop:'15px'}}><label>📑 Pages (edit if wrong)</label><input type="number" className="input" value={pageCount} min="1" onChange={e=>setPageCount(Math.max(1,parseInt(e.target.value)||1))}/></div>}
+
+          {files.map((f, idx) => (
+            <div key={idx} style={{background:'rgba(0,0,0,0.03)',borderRadius:'12px',padding:'15px',marginTop:'12px'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div>
+                  <p style={{fontWeight:'700',margin:0}}>✅ {f.name}</p>
+                  <p style={{color:'var(--gray)',fontSize:'13px',margin:0}}>{(f.size/1024/1024).toFixed(2)} MB</p>
+                </div>
+                <button onClick={()=>removeFile(idx)} style={{background:'#C1666B',color:'white',border:0,borderRadius:'8px',padding:'6px 12px',cursor:'pointer'}}>Remove</button>
+              </div>
+              <div className="input-group" style={{marginTop:'10px'}}>
+                <label>📑 Pages (edit if wrong)</label>
+                <input type="number" className="input" value={f.pageCount} min="1" onChange={e=>updateFileField(idx,'pageCount',Math.max(1,parseInt(e.target.value)||1))}/>
+              </div>
+              <div className="input-group" style={{marginTop:'10px'}}>
+                <label>🔢 Page Range (optional, e.g. 2-5 ya 1,3,7 — khali chhodo pura print karne ke liye)</label>
+                <input type="text" className="input" placeholder="All pages" value={f.pageRange} onChange={e=>updateFileField(idx,'pageRange',e.target.value)}/>
+              </div>
+            </div>
+          ))}
         </div>
 
-        {step >= 2 && (
+        {step >= 2 && files.length > 0 && (
           <div className="customer-card">
             <h3>⚙️ Step 2: Print Settings</h3>
             <div style={{marginBottom:'18px'}}>
@@ -116,7 +208,7 @@ export default function CustomerPrint() {
               </div>
             </div>
             <div style={{marginBottom:'18px'}}>
-              <label style={{fontSize:'14px',fontWeight:'600',color:'var(--gray)',display:'block',marginBottom:'8px'}}>Copies</label>
+              <label style={{fontSize:'14px',fontWeight:'600',color:'var(--gray)',display:'block',marginBottom:'8px'}}>Copies (sabhi files par apply hoga)</label>
               <div className="counter">
                 <button className="counter-btn" onClick={()=>setSettings({...settings,copies:Math.max(1,settings.copies-1)})}>-</button>
                 <span className="counter-value">{settings.copies}</span>
@@ -126,7 +218,7 @@ export default function CustomerPrint() {
             <div style={{marginBottom:'18px'}}>
               <label style={{fontSize:'14px',fontWeight:'600',color:'var(--gray)',display:'block',marginBottom:'8px'}}>Paper</label>
               <div className="toggle-group">
-                {['A4','A3','Legal','Letter'].map(s=>(<button key={s} className={'toggle-btn '+(settings.paper_size===s?'active':'')} onClick={()=>setSettings({...settings,paper_size:s})}>{s}</button>))}
+                {['A4','Legal'].map(s=>(<button key={s} className={'toggle-btn '+(settings.paper_size===s?'active':'')} onClick={()=>setSettings({...settings,paper_size:s})}>{s}</button>))}
               </div>
             </div>
             <div>
@@ -140,32 +232,51 @@ export default function CustomerPrint() {
           </div>
         )}
 
-        {step >= 3 && (
+        {step >= 3 && files.length > 0 && (
           <>
             <div className="customer-card">
               <h3>💰 Step 3: Payment</h3>
               <div style={{background:'linear-gradient(135deg,#1A1A2E,#16213E)',borderRadius:'16px',padding:'25px',color:'white',textAlign:'center',marginBottom:'20px'}}>
-                <div style={{fontSize:'14px',opacity:0.7}}>Total Amount</div>
+                <div style={{fontSize:'14px',opacity:0.7}}>Total Amount ({files.length} file{files.length>1?'s':''})</div>
                 <div className="total-amount">₹{totalAmount}</div>
-                <div style={{fontSize:'13px',opacity:0.6}}>{pageCount}pg x {settings.copies} copies x ₹{pricePerPage}</div>
+                <div style={{fontSize:'13px',opacity:0.6}}>{totalPages} total pages x ₹{pricePerPage}</div>
               </div>
               <div className="toggle-group">
-                <button className={'toggle-btn '+(paymentMethod==='cash'?'active-orange':'')} onClick={()=>setPaymentMethod('cash')}>💵 Cash<br/><small>Counter pe do</small></button>
-                <button className={'toggle-btn '+(paymentMethod==='online'?'active-green':'')} onClick={()=>setPaymentMethod('online')}>📱 UPI<br/><small>Abhi pay karo</small></button>
+                <button className={'toggle-btn '+(paymentMethod==='cash'?'active-orange':'')} onClick={()=>{setPaymentMethod('cash');setPaidConfirmed(false)}}>💵 Cash<br/><small>Counter pe do</small></button>
+                <button
+                  className={'toggle-btn '+(paymentMethod==='online'?'active-green':'')}
+                  onClick={()=>{
+                    if (!owner.upi_id) { alert('Shop ne abhi UPI ID set nahi ki. Cash select karo.'); return }
+                    setPaymentMethod('online')
+                  }}
+                >
+                  📱 UPI<br/><small>Abhi pay karo</small>
+                </button>
               </div>
 
-              {paymentMethod === 'online' && (
+              {paymentMethod === 'online' && !owner.upi_id && (
+                <p style={{color:'#B23B3B',marginTop:'15px',fontWeight:'600'}}>⚠️ Shop ne UPI ID set nahi ki hai. Cash payment use karo.</p>
+              )}
+
+              {paymentMethod === 'online' && owner.upi_id && (
                 <div className="payment-section" style={{marginTop:'20px'}}>
                   <h3>📱 Scan & Pay ₹{totalAmount}</h3>
                   <p style={{opacity:0.8,marginBottom:'15px',fontSize:'14px'}}>QR scan karo ya button dabao</p>
                   <div style={{background:'white',padding:'20px',borderRadius:'16px',display:'inline-block',marginBottom:'15px'}}>
-                    <img src={'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data='+encodeURIComponent(upiUrl)} alt="UPI QR" width="200" height="200" />
+                    {qrDataUrl
+                      ? <img src={qrDataUrl} alt="UPI QR" width="220" height="220" />
+                      : <p style={{color:'#333'}}>QR generate ho raha hai...</p>}
                   </div>
                   <p style={{fontSize:'14px',opacity:0.8}}>UPI: <strong>{owner.upi_id}</strong></p>
                   <a href={upiUrl} className="btn btn-large btn-full" style={{background:'white',color:'#764BA2',marginTop:'10px',fontWeight:'800',textDecoration:'none',display:'flex',alignItems:'center',justifyContent:'center',gap:'8px'}}>
                     📱 Open UPI App & Pay ₹{totalAmount}
                   </a>
-                  <p style={{fontSize:'12px',opacity:0.6,marginTop:'10px'}}>⚠️ Pay karne ke baad neeche Submit button dabao</p>
+
+                  <label style={{display:'flex',alignItems:'center',gap:'10px',marginTop:'20px',fontSize:'14px',cursor:'pointer'}}>
+                    <input type="checkbox" checked={paidConfirmed} onChange={e=>setPaidConfirmed(e.target.checked)} style={{width:'18px',height:'18px'}} />
+                    ✅ Maine Payment Kar Diya Hai
+                  </label>
+                  <p style={{fontSize:'12px',opacity:0.6,marginTop:'8px'}}>⚠️ Payment karne ke baad checkbox tick karo, phir Submit dabao. Shop wala verify karega.</p>
                 </div>
               )}
             </div>
