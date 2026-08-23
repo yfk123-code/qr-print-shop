@@ -104,3 +104,9 @@ body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--light); col
   .order-actions { flex-direction:column; }
   .login-card { margin:20px; padding:30px 25px; }
 }
+/* MOBILE FIXES */
+@media(max-width:768px) {
+  .customer-card { padding: 15px; margin: 10px; overflow: hidden; }
+  .upload-zone { padding: 30px 15px; width: 100%; box-sizing: border-box; }
+  .toggle-group { flex-direction: column; }
+}
