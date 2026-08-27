@@ -26,82 +26,81 @@ export default function CustomerPrint() {
     supabase.from('owner').select('*').limit(1).single().then(({ data }) => setOwner(data))
   }, [])
 
-  // ================= SMART IMAGE ROTATION & MERGING (CANVAS) =================
+  // ================= SMART IMAGE ROTATION & MERGING (BUG FIXED) =================
+  const loadImage = (file) => {
+    return new Promise((resolve, reject) => {
+      const img = new Image()
+      img.onload = () => resolve(img)
+      img.onerror = () => reject(new Error("Image load fail ho gayi"))
+      img.src = URL.createObjectURL(file)
+    })
+  }
+
   const drawSmartImage = (ctx, img, x, y, targetW, targetH) => {
-    ctx.save();
+    ctx.save()
     if (img.height > img.width && targetW > targetH) {
-      // Portrait image for Landscape box -> Rotate
-      ctx.translate(x + targetW / 2, y + targetH / 2);
-      ctx.rotate(-Math.PI / 2);
-      ctx.drawImage(img, -targetH / 2, -targetW / 2, targetH, targetW);
+      // Portrait image in Landscape box -> Rotate
+      ctx.translate(x + targetW / 2, y + targetH / 2)
+      ctx.rotate(-Math.PI / 2)
+      ctx.drawImage(img, -targetH / 2, -targetW / 2, targetH, targetW)
     } else if (img.width > img.height && targetH > targetW) {
-      // Landscape image for Portrait box -> Rotate
-      ctx.translate(x + targetW / 2, y + targetH / 2);
-      ctx.rotate(Math.PI / 2);
-      ctx.drawImage(img, -targetH / 2, -targetW / 2, targetH, targetW);
+      // Landscape image in Portrait box -> Rotate
+      ctx.translate(x + targetW / 2, y + targetH / 2)
+      ctx.rotate(Math.PI / 2)
+      ctx.drawImage(img, -targetH / 2, -targetW / 2, targetH, targetW)
     } else {
-      ctx.drawImage(img, x, y, targetW, targetH);
+      ctx.drawImage(img, x, y, targetW, targetH)
     }
-    ctx.restore();
+    ctx.restore()
   }
 
-  const generateIdCanvas = (frontFile, backFile) => {
-    return new Promise((resolve) => {
-      const canvas = document.createElement('canvas');
-      canvas.width = 2480; canvas.height = 3508; // A4 at 300dpi
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = 'white'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-      
-      const imgF = new Image(); const imgB = new Image();
-      imgF.src = URL.createObjectURL(frontFile);
-      imgB.src = URL.createObjectURL(backFile);
-      
-      imgF.onload = () => {
-        imgB.onload = () => {
-          const CW = 1011, CH = 638, MARGIN = 100, HGAP = 40, VGAP = 60;
-          
-          // Set 1 (Top)
-          drawSmartImage(ctx, imgF, MARGIN, MARGIN, CW, CH);
-          drawSmartImage(ctx, imgB, MARGIN + CW + HGAP, MARGIN, CW, CH);
-          
-          // Set 2 (Bottom)
-          let y2 = MARGIN + CH + VGAP;
-          drawSmartImage(ctx, imgF, MARGIN, y2, CW, CH);
-          drawSmartImage(ctx, imgB, MARGIN + CW + HGAP, y2, CW, CH);
+  const generateIdCanvas = async (frontFile, backFile) => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 2480; canvas.height = 3508 // A4 300dpi
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = 'white'; ctx.fillRect(0, 0, canvas.width, canvas.height)
+    
+    const imgF = await loadImage(frontFile)
+    const imgB = await loadImage(backFile)
+    
+    const CW = 1011, CH = 638, MARGIN = 100, HGAP = 40, VGAP = 60
+    
+    // Set 1 (Top)
+    drawSmartImage(ctx, imgF, MARGIN, MARGIN, CW, CH)
+    drawSmartImage(ctx, imgB, MARGIN + CW + HGAP, MARGIN, CW, CH)
+    
+    // Set 2 (Bottom)
+    let y2 = MARGIN + CH + VGAP
+    drawSmartImage(ctx, imgF, MARGIN, y2, CW, CH)
+    drawSmartImage(ctx, imgB, MARGIN + CW + HGAP, y2, CW, CH)
 
-          canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.9);
-        }
-      }
-    });
+    return new Promise((resolve) => {
+      canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.95)
+    })
   }
 
-  const generatePassportCanvas = (photoFile, copiesNum) => {
+  const generatePassportCanvas = async (photoFile, copiesNum) => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 2480; canvas.height = 3508
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = 'white'; ctx.fillRect(0, 0, canvas.width, canvas.height)
+    
+    const img = await loadImage(photoFile)
+    const PW = 413, PH = 531, MARGIN = 60, GAP = 20
+    let col = 0, row = 0
+    
+    for(let i=0; i<copiesNum; i++) {
+      let x = MARGIN + col * (PW + GAP)
+      let y = MARGIN + row * (PH + GAP)
+      if (y + PH > canvas.height - MARGIN) break
+      drawSmartImage(ctx, img, x, y, PW, PH)
+      col++
+      if(col >= 5) { col = 0; row++ }
+    }
+    
     return new Promise((resolve) => {
-      const canvas = document.createElement('canvas');
-      canvas.width = 2480; canvas.height = 3508;
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = 'white'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-      
-      const img = new Image();
-      img.src = URL.createObjectURL(photoFile);
-      
-      img.onload = () => {
-        const PW = 413, PH = 531, MARGIN = 60, GAP = 20;
-        let col = 0, row = 0;
-        
-        for(let i=0; i<copiesNum; i++) {
-          let x = MARGIN + col * (PW + GAP);
-          let y = MARGIN + row * (PH + GAP);
-          if (y + PH > canvas.height - MARGIN) break; // Max 30 fit on A4
-          
-          drawSmartImage(ctx, img, x, y, PW, PH);
-          
-          col++;
-          if(col >= 5) { col = 0; row++; }
-        }
-        canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.9);
-      }
-    });
+      canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.95)
+    })
   }
 
   // ================= FILE HANDLERS =================
@@ -124,24 +123,30 @@ export default function CustomerPrint() {
     if (!idFront || !idBack) return alert('Front aur Back dono upload karein!')
     setProcessing(true)
     try {
-      const mergedBlob = await generateIdCanvas(idFront, idBack);
-      mergedBlob.name = 'Merged_ID_Card.jpg';
-      setFiles(prev => [...prev, { file: mergedBlob, name: 'ID_Card_Print.jpg', size: mergedBlob.size, pageCount: 1, pageRange: '' }])
+      const mergedBlob = await generateIdCanvas(idFront, idBack)
+      const mergedFile = new File([mergedBlob], 'ID_Card_Print.jpg', { type: 'image/jpeg' })
+      setFiles(prev => [...prev, { file: mergedFile, name: 'ID_Card_Print.jpg', size: mergedFile.size, pageCount: 1, pageRange: '' }])
       setIdFront(null); setIdBack(null); setStep(2)
-    } catch(e) { alert("Error generating ID Card") }
-    setProcessing(false)
+    } catch(e) { 
+      alert("Error generating ID Card: " + e.message) 
+    } finally {
+      setProcessing(false)
+    }
   }
 
   const handleAddPassport = async () => {
     if (!passportPhoto) return alert('Photo upload karein!')
     setProcessing(true)
     try {
-      const mergedBlob = await generatePassportCanvas(passportPhoto, parseInt(passportCopies));
-      mergedBlob.name = 'Merged_Passport.jpg';
-      setFiles(prev => [...prev, { file: mergedBlob, name: `Passport_${passportCopies}_Copies.jpg`, size: mergedBlob.size, pageCount: 1, pageRange: '' }])
+      const mergedBlob = await generatePassportCanvas(passportPhoto, parseInt(passportCopies))
+      const mergedFile = new File([mergedBlob], `Passport_${passportCopies}_Copies.jpg`, { type: 'image/jpeg' })
+      setFiles(prev => [...prev, { file: mergedFile, name: `Passport_${passportCopies}_Copies.jpg`, size: mergedFile.size, pageCount: 1, pageRange: '' }])
       setPassportPhoto(null); setStep(2)
-    } catch(e) { alert("Error generating Passport") }
-    setProcessing(false)
+    } catch(e) { 
+      alert("Error generating Passport: " + e.message) 
+    } finally {
+      setProcessing(false)
+    }
   }
 
   const removeFile = (idx) => {
@@ -283,7 +288,7 @@ export default function CustomerPrint() {
                   <div style={{ marginTop: '15px' }}>
                     <label style={styles.labelBold}>Kitni Copies chahiye?</label>
                     <select value={passportCopies} onChange={e=>setPassportCopies(e.target.value)} style={styles.selectBox}>
-                      {['1','2','3','4','5','6','8','10','12','15','20','25','30'].map(v => <option key={v} value={v}>{v} Photos</option>)}
+                      {['1','2','3','4','5','6','8','10','12','15','20','25','30','40','50'].map(v => <option key={v} value={v}>{v} Photos</option>)}
                     </select>
                     <button style={{ ...styles.primaryBtn, background: '#DB2777' }} onClick={handleAddPassport}>+ Generate Passport Sheet</button>
                   </div>
