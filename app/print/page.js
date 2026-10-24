@@ -1,15 +1,16 @@
-Aapka poora code **100% Retain** kiya gaya hai (Aadhaar/PAN ID Card Merge Canvas, Passport Photo Layout Generator, Color/BW Settings, Token Number System, Page Ranges, aur UI Styling sab waisa hi hai).
+**Yeh error isliye aaya kyunki aapne mere samjhane wale text (`Aapka poora code...`) ko bhi file me copy-paste kar diya tha!** 😅
 
-Usme **YouPI-PG Payment Gateway Integration** add kar diya gaya hai.
-
-### 🌟 Naya Addition Kya Hua Hai:
-1. **YouPI-PG Script Auto Load:** `next/script` se YouPI PG ka SDK load ho raha hai.
-2. **Auto Payment Verification:** Jab customer "Online UPI" select karega, wo **YouPI PG ka Dynamic QR / App Switcher Modal** kholega.
-3. **Instant Payment Check:** Payment hote hi YouPI response UTR number ke saath order submit karke Supabase status update kar dega!
+JavaScript/React file ke andar sirf code hona chahiye, Hindi/English text nahi.
 
 ---
 
-### 📁 Updated `app/print/page.js` Code:
+### 🛠️ Fix Karne Ka Tarika:
+
+Apne VS Code / Code Editor me **`app/print/page.js`** file ko kholo. 
+
+Pehle se jo kuch bhi likha hai usko **poora DELETE (Ctrl + A -> Delete)** kar do.
+
+Aur niche diya gaya **Pure Code** copy karke paste kar do:
 
 ```javascript
 'use client'
@@ -26,7 +27,7 @@ export default function CustomerPrint() {
   const [idFront, setIdFront] = useState(null)
   const [idBack, setIdBack] = useState(null)
   const [passportPhoto, setPassportPhoto] = useState(null)
-  const [passportCopies, setPassportCopies] = useState("6") // Manual Input State
+  const [passportCopies, setPassportCopies] = useState("6")
   
   const [settings, setSettings] = useState({ copies: 1, color_mode: 'color', paper_size: 'A4', sides: 'single' })
   const [paymentMethod, setPaymentMethod] = useState('cash')
@@ -41,7 +42,6 @@ export default function CustomerPrint() {
     supabase.from('owner').select('*').limit(1).single().then(({ data }) => setOwner(data))
   }, [])
 
-  // ================= SMART IMAGE CROP & MERGE =================
   const loadImage = (file) => {
     return new Promise((resolve, reject) => {
       const img = new Image()
@@ -51,7 +51,6 @@ export default function CustomerPrint() {
     })
   }
 
-  // Ye function image ko perfect ID size me crop karta hai (Bina stretch kiye)
   const drawCenterCrop = (ctx, img, x, y, w, h) => {
     let scale = Math.max(w / img.width, h / img.height);
     let nw = img.width * scale;
@@ -68,16 +67,15 @@ export default function CustomerPrint() {
 
   const generateIdCanvas = async (frontFile, backFile) => {
     const canvas = document.createElement('canvas')
-    canvas.width = 2480; canvas.height = 3508 // A4 Size 300dpi
+    canvas.width = 2480; canvas.height = 3508
     const ctx = canvas.getContext('2d')
     ctx.fillStyle = 'white'; ctx.fillRect(0, 0, canvas.width, canvas.height)
     
     const imgF = await loadImage(frontFile)
     const imgB = await loadImage(backFile)
     
-    const CW = 1011, CH = 638, MARGIN = 100, HGAP = 40, VGAP = 60
+    const CW = 1011, CH = 638, MARGIN = 100, HGAP = 40
     
-    // Sirf 1 Set (Front aur Back side-by-side) - Perfect Size
     drawCenterCrop(ctx, imgF, MARGIN, MARGIN, CW, CH)
     drawCenterCrop(ctx, imgB, MARGIN + CW + HGAP, MARGIN, CW, CH)
 
@@ -100,7 +98,7 @@ export default function CustomerPrint() {
       ctx.fillStyle = 'white'; ctx.fillRect(0, 0, canvas.width, canvas.height)
 
       let col = 0, row = 0
-      let pageCopies = Math.min(remaining, 30) // Max 30 per page
+      let pageCopies = Math.min(remaining, 30)
 
       for(let i=0; i<pageCopies; i++) {
         let x = MARGIN + col * (PW + GAP)
@@ -117,7 +115,6 @@ export default function CustomerPrint() {
     return blobs;
   }
 
-  // ================= FILE HANDLERS =================
   const handleNormalFiles = (e) => {
     const selected = Array.from(e.target.files || [])
     if (!selected.length) return
@@ -172,7 +169,6 @@ export default function CustomerPrint() {
     setFiles(prev => prev.map((f, i) => i === idx ? { ...f, [field]: value } : f))
   }
 
-  // ================= CALCULATIONS =================
   let totalAmount = 0;
   files.forEach(f => {
     if (f.type === 'idcard') {
@@ -185,7 +181,6 @@ export default function CustomerPrint() {
     }
   });
 
-  const totalPages = files.reduce((sum, f) => sum + (f.pageCount || 0), 0) * settings.copies
   const upiUrl = owner?.upi_id ? `upi://pay?pa=${owner.upi_id}&pn=${encodeURIComponent(owner?.shop_name || 'Print')}&am=${totalAmount}&cu=INR` : null
 
   useEffect(() => {
@@ -194,7 +189,6 @@ export default function CustomerPrint() {
     } else setQrDataUrl(null)
   }, [paymentMethod, upiUrl, totalAmount])
 
-  // ================= SUBMIT ORDER WITH YOUPI-PG =================
   const handleSubmit = async () => {
     if (!files.length) return alert('Files upload karein!')
     if (paymentMethod === 'online' && !owner?.upi_id && !window.Youpi) {
@@ -207,7 +201,6 @@ export default function CustomerPrint() {
       const token = (last?.token_number || 0) + 1
       const rows = []
 
-      // Upload files to Supabase Storage
       for (const f of files) {
         const fileName = Date.now() + '_' + f.name.replace(/[^a-zA-Z0-9._-]/g, '_')
         await supabase.storage.from('prints').upload(fileName, f.file)
@@ -240,7 +233,6 @@ export default function CustomerPrint() {
       const { data: insertedOrders, error: insertError } = await supabase.from('orders').insert(rows).select()
       if (insertError) throw insertError
 
-      // ================= ONLINE YOUPI-PG PAYMENT TRIGGER =================
       if (paymentMethod === 'online' && window.Youpi) {
         const firstOrderId = insertedOrders[0]?.id || token.toString()
 
@@ -251,7 +243,6 @@ export default function CustomerPrint() {
           name: owner?.shop_name || 'QR Print System',
           description: `Print Order Token #${token}`,
           handler: async function (response) {
-            // Update Payment Status in Supabase on Success
             await supabase.from('orders').update({
               payment_status: 'verified',
               order_status: 'pending',
@@ -263,11 +254,10 @@ export default function CustomerPrint() {
           },
           onClose: function () {
             setUploading(false)
-            alert('Payment modal close kar diya gaya. Aap counter par cash se bhi pay kar sakte hain.')
+            alert('Payment modal close kar diya gaya.')
           }
         })
       } else {
-        // Cash Payment Direct Order
         setSuccess({ token, amount: totalAmount, method: paymentMethod, count: files.length })
         setUploading(false)
       }
@@ -284,7 +274,6 @@ export default function CustomerPrint() {
 
   return (
     <div style={styles.page}>
-      {/* YouPI-PG Gateway Script Integration */}
       <Script 
         src="http://localhost:7000/youpi.js" 
         data-youpi-key={owner?.youpi_key || "YOUR_YOUPI_MERCHANT_KEY"} 
@@ -521,3 +510,5 @@ const styles = {
   tokenBox: { background: '#EEF2FF', border: '2px dashed #818CF8', color: '#4F46E5', padding: '20px', borderRadius: '15px', margin: '20px 0' }
 }
 ```
+
+Is code ko save karke **Vercel me commit/push** kar do, bina kisi syntax error ke build ho jayega! 🚀
