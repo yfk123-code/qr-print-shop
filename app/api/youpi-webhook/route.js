@@ -65,7 +65,7 @@ export async function POST(req) {
   }
 
   // Duplicate / retry delivery: pehle se verified hai to kuch mat karo
-  if (rows.every((r) => r.payment_status === 'verified')) {
+  if (rows.every((r) => ['verified', 'collected'].includes(r.payment_status))) {
     return Response.json({ received: true });
   }
 
