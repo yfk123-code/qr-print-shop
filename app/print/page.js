@@ -251,11 +251,9 @@ export default function CustomerPrint() {
     if (!files.length) return alert('Files upload karein!');
     if (
       paymentMethod === 'online' &&
-      !owner?.upi_id &&
-      typeof window !== 'undefined' &&
-      !window.Youpi
+      (typeof window === 'undefined' || !window.Youpi)
     ) {
-      return alert('Shop UPI / Payment Gateway set nahi hai. Cash use karein.');
+      return alert('Online payment abhi available nahi hai. Cash use karein.');
     }
 
     setUploading(true);
@@ -318,24 +316,15 @@ export default function CustomerPrint() {
         typeof window !== 'undefined' &&
         window.Youpi
       ) {
-        const firstOrderId = insertedOrders[0]?.id || token.toString();
-
         window.Youpi.pay({
-          order_id: firstOrderId,
+          order_id: `PRINT-${token}`,
           amount: totalAmount,
           currency: 'INR',
           name: owner?.shop_name || 'QR Print System',
           description: `Print Order Token #${token}`,
-          handler: async function (response) {
-            await supabase
-              .from('orders')
-              .update({
-                payment_status: 'verified',
-                order_status: 'pending',
-                utr_number: response.utr || '',
-              })
-              .eq('token_number', token);
-
+          handler: function (response) {
+            // Asli payment confirmation server webhook se hota hai
+            // (app/api/youpi-webhook/route.js). Yahan sirf customer ko screen dikhate hain.
             setSuccess({
               token,
               amount: totalAmount,
@@ -380,8 +369,8 @@ export default function CustomerPrint() {
   return (
     <div style={styles.page}>
       <Script
-        src="http://localhost:7000/youpi.js"
-        data-youpi-key={owner?.youpi_key || 'YOUR_YOUPI_MERCHANT_KEY'}
+        src={`${process.env.NEXT_PUBLIC_YOUPI_URL}/youpi.js`}
+        data-youpi-key={process.env.NEXT_PUBLIC_YOUPI_KEY}
         data-currency="INR"
         strategy="afterInteractive"
       />
@@ -422,7 +411,7 @@ export default function CustomerPrint() {
             <p style={{ color: '#666', marginTop: '10px' }}>
               {success.method === 'cash'
                 ? 'Counter pe cash do aur print le lo!'
-                : 'Payment Verified! Printer me document bhej diya gaya hai!'}
+                : 'Payment mil gaya. Owner approve karte hi print shuru hoga!'}
             </p>
             <button style={styles.primaryBtn} onClick={resetAll}>
               Print More Documents
@@ -835,13 +824,9 @@ export default function CustomerPrint() {
             {paymentMethod === 'online' && (
               <div style={styles.qrSection}>
                 <p style={{ fontWeight: 'bold' }}>Pay via PhonePe / GPay / Paytm</p>
-                {qrDataUrl && (
-                  <div style={styles.qrCodeBox}>
-                    <img src={qrDataUrl} alt="UPI QR" width="200" height="200" />
-                  </div>
-                )}
-                <p style={{ fontSize: '12px', color: '#6B7280' }}>
-                  Submit dabaney par Auto Payment Gateway khulega!
+                <p style={{ fontSize: '13px', color: '#6B7280' }}>
+                  &quot;Pay &amp; Submit Order&quot; dabate hi secure payment window khulegi.
+                  Wahin QR scan karke ya UPI app se pay karo.
                 </p>
               </div>
             )}
